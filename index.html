@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Segmentation</title>
+    <style>
+        #image {
+            cursor: crosshair;
+            display: block;
+            margin: 0 auto;
+            max-width: 80%;
+            position: relative;
+        }
+        #segmented {
+            display: block;
+            margin: 20px auto;
+            max-width: 80%;
+        }
+        #upload {
+            display: block;
+            margin: 20px auto;
+        }
+        .marker {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+        .positive {
+            background-color: green;
+        }
+        .negative {
+            background-color: red;
+        }
+        #clear {
+            display: block;
+            margin: 20px auto;
+        }
+    </style>
+</head>
+<body>
+    <h1 style="text-align: center;">Upload and Click to Segment Object</h1>
+
+    <!-- File input for uploading a new image -->
+    <input type="file" id="upload" accept="image/*">
+
+    <!-- Button to clear all points -->
+    <button id="clear">Remove All Points</button>
+
+    <!-- Container for original image and markers -->
+    <div id="image-container" style="position: relative;">
+        <img id="image" src="dogs.jpg" alt="Image to Segment">
+    </div>
+
+    <div id="result">
+        <img id="segmented" style="display: none;" alt="Segmented Object">
+        <a id="download-link" href="#" style="display: none;">Download Segmented Object</a>
+    </div>
+
+    <script>
+        const img = document.getElementById('image');
+        const upload = document.getElementById('upload');
+        const clearButton = document.getElementById('clear');
+        const imageContainer = document.getElementById('image-container');
+        const resultDiv = document.getElementById('result');
+        const segmentedImg = document.getElementById('segmented');
+        const downloadLink = document.getElementById('download-link');
+
+        let positivePoints = [];
+        let negativePoints = [];
+
+        let margin_x = 0;
+
+        // Handle image upload and send to Flask API for resizing
+        upload.addEventListener('change', async function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                // Create FormData to send the uploaded image
+                const formData = new FormData();
+                formData.append('image', file);
+
+                // Send request to Flask API to resize the image
+                try {
+                    const response = await fetch('http://127.0.0.1:5000/resize', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Failed to resize the image.');
+                    }
+
+                    // Update the image source to the resized image
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    img.src = url;  // Set the new resized image as the source
+
+                    // Clear previous markers
+                    positivePoints = [];
+                    negativePoints = [];
+                    clearMarkers();
+                } catch (error) {
+                    console.error('Error resizing the image:', error);
+                }
+            }
+        });
+
+        // Handle click event for adding points and call segmentation
+        img.addEventListener('click', async function(event) {
+            const rect = img.getBoundingClientRect();
+            margin_x = rect.left;
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            console.log(`Clicked at: x=${x}, y=${y}`);
+
+            if (event.shiftKey) {
+                // Add negative point (red marker)
+                negativePoints.push([x, y]);
+                addMarker(x+rect.left, y, 'negative');
+            } else {
+                // Add positive point (green marker)
+                positivePoints.push([x, y]);
+                addMarker(x+rect.left, y, 'positive');
+            }
+
+            // Immediately call the segmentation API after each click
+            try {
+                const response = await fetch(img.src);
+                const blob = await response.blob();
+
+                const formData = new FormData();
+                formData.append('image', blob, 'uploaded_image.png');
+                formData.append('points', JSON.stringify([...positivePoints, ...negativePoints]));
+                formData.append('labels', JSON.stringify([...Array(positivePoints.length).fill(1), ...Array(negativePoints.length).fill(0)]));
+
+                const apiResponse = await fetch('http://127.0.0.1:5000/segment', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!apiResponse.ok) {
+                    throw new Error('Failed to fetch the segmented image.');
+                }
+
+                const segmentedBlob = await apiResponse.blob();
+                const url = URL.createObjectURL(segmentedBlob);
+                segmentedImg.src = url;
+                segmentedImg.style.display = 'block';
+
+                // Set up download link
+                downloadLink.href = url;
+                downloadLink.style.display = 'block';
+                downloadLink.download = 'selected_object.png';
+                downloadLink.textContent = 'Download Segmented Object';
+            } catch (error) {
+                console.error('Error during segmentation:', error);
+            }
+        });
+
+        // Handle clear button click to remove all points and markers
+        clearButton.addEventListener('click', function() {
+            positivePoints = [];
+            negativePoints = [];
+            clearMarkers();
+        });
+
+        // Helper function to add a marker on the image
+        function addMarker(x, y, type) {
+            const marker = document.createElement('div');
+            marker.className = `marker ${type}`;
+            marker.style.left = `${x}px`;
+            marker.style.top = `${y}px`;
+            imageContainer.appendChild(marker);
+        }
+
+        // Helper function to clear all markers
+        function clearMarkers() {
+            const markers = document.querySelectorAll('.marker');
+            markers.forEach(marker => marker.remove());
+        }
+    </script>
+</body>
+</html>
